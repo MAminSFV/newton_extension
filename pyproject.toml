@@ -1,0 +1,14 @@
+[project]
+name = "newton-extension"
+version = "0.1.0"
+description = "Custom Newton physics solver as an Isaac Sim Kit extension (Xewton)"
+readme = "README.md"
+# omniverse-kit 110.x is published only for CPython 3.12.
+requires-python = "==3.12.*"
+dependencies = [
+    "omniverse-kit",
+]
+
+[tool.uv]
+# isaacsim-* and omniverse-kit packages live on NVIDIA's index, not PyPI.
+extra-index-url = ["https://pypi.nvidia.com"]

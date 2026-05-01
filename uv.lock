@@ -1,0 +1,23 @@
+version = 1
+revision = 3
+requires-python = "==3.12.*"
+
+[[package]]
+name = "newton-extension"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "omniverse-kit" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "omniverse-kit" }]
+
+[[package]]
+name = "omniverse-kit"
+version = "110.0.0.276876"
+source = { registry = "https://pypi.nvidia.com/" }
+wheels = [
+    { url = "https://pypi.nvidia.com/omniverse-kit/omniverse_kit-110.0.0.276876-cp312-none-manylinux_2_35_x86_64.whl", hash = "sha256:b0f4c7b05afd1da00daf38a29893f650fc8e20906ad78455fa9a74b9436034da" },
+    { url = "https://pypi.nvidia.com/omniverse-kit/omniverse_kit-110.0.0.276876-cp312-none-win_amd64.whl", hash = "sha256:0778a498b13c0137bd798086840ec8bb3bf25965e2c3ce3b9685dc74f33b8ee0" },
+]
