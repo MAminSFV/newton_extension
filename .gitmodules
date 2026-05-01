@@ -1,4 +1,0 @@
-[submodule "IsaacSim"]
-	path = IsaacSim
-	url = https://github.com/isaac-sim/IsaacSim.git
-	branch = develop
