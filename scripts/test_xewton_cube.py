@@ -82,7 +82,7 @@ def _on_step(dt: float) -> None:
 _sub = omni.physx.get_physx_interface().subscribe_physics_step_events(_on_step)
 
 print()
-print("Stage ready — press ▶ Play.")
+print("Stage ready — press Play.")
 print("The cube should accelerate in +X only (Y=0, Z=0).")
 print("With Xewton: matches the Xewton column (~19.62 m/s²).")
 print("With stock Newton: matches the Newton column (~9.81 m/s²).")
