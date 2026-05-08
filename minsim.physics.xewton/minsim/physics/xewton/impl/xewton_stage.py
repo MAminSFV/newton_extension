@@ -19,14 +19,32 @@ from .xsolver import XSolver
 class XewtonStage(NewtonStage):
     """NewtonStage that knows how to construct the XSolver custom solver."""
 
+    def initialize_newton(self, device):
+        """Initialize Newton, ensuring MuJoCo attributes are always registered.
+
+        SchemaResolverMjc is always included in add_usd() by NewtonStage, but
+        SolverMuJoCo.register_custom_attributes() is only called when
+        solver_type == "mujoco". For "xsolver" we briefly present as "mujoco"
+        so the registration runs, then restore the original type and swap in
+        the real XSolver.
+        """
+        solver_cfg = self.cfg.solver_cfg
+        original_type = getattr(solver_cfg, "solver_type", None)
+        needs_patch = original_type not in ("mujoco", "xpbd", None)
+
+        if needs_patch:
+            solver_cfg.solver_type = "mujoco"
+        try:
+            super().initialize_newton(device)
+        finally:
+            if needs_patch:
+                solver_cfg.solver_type = original_type
+
+        if needs_patch and self.model is not None:
+            self.solver = type(self)._get_solver(self.model, solver_cfg)
+
     @classmethod
     def _get_solver(cls, model: newton.Model, solver_cfg):
-        """Construct the solver for this step.
-
-        Falls through to :meth:`NewtonStage._get_solver` for stock solver
-        types (xpbd, mujoco). Adds an ``"xsolver"`` branch that wraps a
-        ``SolverSemiImplicit`` delegate inside :class:`XSolver`.
-        """
         if isinstance(solver_cfg, XSolverConfig) or getattr(solver_cfg, "solver_type", None) == "xsolver":
             delegate = newton.solvers.SolverSemiImplicit(model)
             return XSolver(model, delegate=delegate)
