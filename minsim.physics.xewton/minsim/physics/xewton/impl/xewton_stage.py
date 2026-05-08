@@ -21,14 +21,16 @@ class XewtonStage(NewtonStage):
     """NewtonStage that knows how to construct the XSolver custom solver."""
 
     def __setattr__(self, name, value):
-        """Intercept self.builder assignment to auto-register MuJoCo attributes.
+        """Intercept key attribute assignments to handle Newton API differences.
 
-        NewtonStage.initialize_newton always includes SchemaResolverMjc in the
-        add_usd() call, which requires SolverMuJoCo.register_custom_attributes()
-        to have run on the builder first — even for non-MuJoCo solvers.
-        We hook the assignment of self.builder so registration happens on the
-        fresh ModelBuilder before add_usd() is called, without needing to
-        duplicate any of NewtonStage's initialization code.
+        1. self.builder — auto-register MuJoCo attributes before add_usd().
+           NewtonStage always passes SchemaResolverMjc to add_usd(), which
+           requires SolverMuJoCo.register_custom_attributes() even for
+           non-MuJoCo solvers.
+
+        2. self.model — wrap model.collide() to accept and silently drop
+           rigid_contact_margin / soft_contact_margin kwargs absent in older
+           Newton versions, avoiding a TypeError in NewtonStage.simulate().
         """
         super().__setattr__(name, value)
         if name == "builder" and value is not None:
@@ -39,6 +41,18 @@ class XewtonStage(NewtonStage):
             if not has_mujoco:
                 carb.log_warn("[xewton] registering MuJoCo custom attributes on builder")
                 newton.solvers.SolverMuJoCo.register_custom_attributes(value)
+        elif name == "model" and value is not None:
+            import inspect
+            _orig_collide = value.collide
+            try:
+                supports_margins = "rigid_contact_margin" in inspect.signature(_orig_collide).parameters
+            except (ValueError, TypeError):
+                supports_margins = True
+            if not supports_margins:
+                carb.log_warn("[xewton] wrapping model.collide() for older Newton API compatibility")
+                def _collide_compat(state, rigid_contact_margin=None, soft_contact_margin=None, **kwargs):
+                    return _orig_collide(state, **kwargs)
+                value.collide = _collide_compat
 
     @classmethod
     def _get_solver(cls, model: newton.Model, solver_cfg):
