@@ -50,7 +50,7 @@ CUBE_PATH = "/World/Cube"
 UsdGeom.Cube.Define(stage, CUBE_PATH).CreateSizeAttr().Set(0.5)
 prim = stage.GetPrimAtPath(CUBE_PATH)
 UsdGeom.Xformable(prim).AddTranslateOp().Set(Gf.Vec3d(0, 0, 0))
-UsdPhysics.ColliderAPI.Apply(prim)
+UsdPhysics.CollisionAPI.Apply(prim)
 UsdPhysics.RigidBodyAPI.Apply(prim)
 UsdPhysics.MassAPI.Apply(prim).CreateMassAttr().Set(1.0)
 
