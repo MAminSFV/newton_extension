@@ -69,9 +69,10 @@ joint.GetBody1Rel().SetTargets([Sdf.Path(CUBE_PATH)])
 joint.CreateAxisAttr().Set("X")
 
 # ── 3. Step callback ───────────────────────────────────────────────────────
-FORCE_N   = 5.0
-MASS_KG   = 1.0
-SIM_LIMIT = 2.0          # stop and report after this many simulated seconds
+FORCE_N    = 5.0
+MASS_KG    = 1.0
+PHYSICS_HZ = 60           # expected physics rate
+N_STEPS    = 2 * PHYSICS_HZ   # 120 steps ≈ 2 s at 60 Hz — deterministic stop
 
 A_NEWTON = FORCE_N / MASS_KG        #  5.00 m/s²
 A_XEWTON = A_NEWTON * 2.0           # 10.00 m/s²
@@ -81,15 +82,17 @@ A_XEWTON = A_NEWTON * 2.0           # 10.00 m/s²
 _wrench = wp.spatial_vector(FORCE_N, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 _sim_t    = 0.0
+_step     = 0
 _body_idx = None
 _done     = False
 
 def _on_step(dt: float) -> None:
-    global _sim_t, _body_idx, _done
+    global _sim_t, _step, _body_idx, _done
     if _done:
         return
 
     _sim_t += dt
+    _step  += 1
 
     newton_stage = xewton.acquire_stage() if xewton else None
     if newton_stage is None or newton_stage.state_0 is None or newton_stage.model is None:
@@ -106,28 +109,29 @@ def _on_step(dt: float) -> None:
     # the state swap, so state_0 is the upcoming state_in).
     newton_stage.state_0.body_f.assign([_wrench])
 
-    if _sim_t < SIM_LIMIT:
+    if _step < N_STEPS:
         return
 
-    # ── 2 s reached: read final position, print, stop. ──────────────────
+    # ── N_STEPS reached: read final position, print, stop. ───────────────
     _done = True
 
     body_q = newton_stage.state_0.body_q.numpy()
     x = float(body_q[_body_idx][0])
 
-    x_newton = 0.5 * A_NEWTON * SIM_LIMIT ** 2
-    x_xewton = 0.5 * A_XEWTON * SIM_LIMIT ** 2
+    # Use actual accumulated sim_t so expected values match the real run.
+    x_newton = 0.5 * A_NEWTON * _sim_t ** 2
+    x_xewton = 0.5 * A_XEWTON * _sim_t ** 2
 
     print()
-    print("═" * 52)
-    print(f"  t = {_sim_t:.3f} s  |  F = {FORCE_N} N  |  m = {MASS_KG} kg")
-    print("─" * 52)
-    print(f"  actual x          : {x:8.4f} m")
-    print(f"  expected (Newton) : {x_newton:8.4f} m   (a = {A_NEWTON:.2f} m/s²)")
-    print(f"  expected (Xewton) : {x_xewton:8.4f} m   (a = {A_XEWTON:.2f} m/s²)")
+    print("═" * 56)
+    print(f"  steps = {_step}  |  t = {_sim_t:.4f} s  |  F = {FORCE_N} N  |  m = {MASS_KG} kg")
+    print("─" * 56)
+    print(f"  actual x          : {x:9.4f} m")
+    print(f"  expected (Newton) : {x_newton:9.4f} m   (a = {A_NEWTON:.2f} m/s²)")
+    print(f"  expected (Xewton) : {x_xewton:9.4f} m   (a = {A_XEWTON:.2f} m/s²)")
     if x_newton > 0:
-        print(f"  ratio             : {x / x_newton:8.4f}x  (Xewton should be 2.0x)")
-    print("═" * 52)
+        print(f"  ratio             : {x / x_newton:9.4f}x  (Xewton should be 2.0x)")
+    print("═" * 56)
 
     omni.timeline.get_timeline_interface().stop()
 
@@ -141,6 +145,6 @@ else:
     print("[xewton_test] WARNING: xewton not available")
 
 print()
-print("Stage ready — press Play.  Will auto-stop at 2 s and print results.")
-print(f"  Stock Newton: a = {A_NEWTON:.2f} m/s²  →  x(2s) = {0.5*A_NEWTON*SIM_LIMIT**2:.2f} m")
-print(f"  Xewton      : a = {A_XEWTON:.2f} m/s²  →  x(2s) = {0.5*A_XEWTON*SIM_LIMIT**2:.2f} m")
+print(f"Stage ready — press Play.  Will auto-stop after {N_STEPS} steps (~2 s) and print results.")
+print(f"  Stock Newton: a = {A_NEWTON:.2f} m/s²  →  x(2s) ≈ {0.5*A_NEWTON*4.0:.2f} m")
+print(f"  Xewton      : a = {A_XEWTON:.2f} m/s²  →  x(2s) ≈ {0.5*A_XEWTON*4.0:.2f} m")
