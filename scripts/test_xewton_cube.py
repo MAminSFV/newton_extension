@@ -18,9 +18,7 @@ How to run
   5. Compare the printed x values against the two expected columns.
 """
 
-import carb
 import omni.usd
-import omni.physx
 from pxr import UsdGeom, UsdPhysics, Gf
 
 # ── 1. Report active engine ────────────────────────────────────────────────
@@ -31,6 +29,7 @@ try:
     print(f"[xewton_test] engine = '{engine}'  {'✓ Xewton active' if ok else '✗ NOT Xewton — results will match Newton column'}")
 except Exception as exc:
     print(f"[xewton_test] import failed: {exc}")
+    xewton = None
 
 # ── 2. Build stage ─────────────────────────────────────────────────────────
 stage = omni.usd.get_context().get_stage()
@@ -65,11 +64,21 @@ def _on_step(dt: float) -> None:
     if _step % 60 != 0:          # print once per ~second at 60 Hz
         return
 
-    pos = prim.GetAttribute("xformOp:translate").Get()
-    if pos is None:
+    # Newton writes positions to Fabric, not back to the USD layer.
+    # Read position directly from Newton's simulation state (body_q).
+    newton_stage = xewton.acquire_stage() if xewton else None
+    if newton_stage is None or newton_stage.state_0 is None or newton_stage.model is None:
         return
 
-    x = pos[0]
+    try:
+        body_idx = list(newton_stage.model.body_label).index(CUBE_PATH)
+    except ValueError:
+        return
+
+    # body_q is a warp array of wp.transform: [pos.x, pos.y, pos.z, qx, qy, qz, qw]
+    body_q = newton_stage.state_0.body_q.numpy()
+    x = float(body_q[body_idx][0])
+
     x_newton = 0.5 * 9.81  * _sim_t ** 2
     x_xewton = 0.5 * 19.62 * _sim_t ** 2
 
@@ -79,7 +88,17 @@ def _on_step(dt: float) -> None:
         f"expected Newton={x_newton:7.3f}  Xewton={x_xewton:7.3f}"
     )
 
-_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(_on_step)
+# Subscribe via the Xewton physics interface so the callback fires with Newton.
+# NewtonPhysicsInterface.subscribe_physics_step_events adds to physics_callbacks,
+# which step_sim calls as callback(dt) after each integration step.
+if xewton:
+    _iface = xewton.acquire_physics_interface()
+    if _iface:
+        _sub = _iface.subscribe_physics_step_events(_on_step)
+    else:
+        print("[xewton_test] WARNING: could not acquire physics interface - callback not registered")
+else:
+    print("[xewton_test] WARNING: xewton not available - callback not registered")
 
 print()
 print("Stage ready — press Play.")
