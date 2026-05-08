@@ -21,11 +21,11 @@ writeTarget.kit = true
 
 [[python.module]]
 name = "minsim.physics.xewton"
-path = ".."
+path = "."
 
 [[python.module]]
 name = "minsim.physics.xewton.tests"
-path = ".."
+path = "."
 
 [settings]
 # Enable CUDA graph capture for physics stepping to improve GPU performance.
