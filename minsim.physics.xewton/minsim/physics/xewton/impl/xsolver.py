@@ -19,9 +19,9 @@ Conventions
 - `newton.State.body_f`  : wp.array of wp.spatial_vector, length = model.body_count.
 - `newton.State.body_q`  : wp.array of wp.transform (pos.xyz, quat.xyzw = 7 floats).
 - `newton.State.body_qd` : wp.array of wp.spatial_vector (spatial twist).
-- `wp.spatial_vector`    : layout (vx, vy, vz, wx, wy, wz),
-                            i.e. linear 3-vector first, angular 3-vector second.
-                            Index 0 is linear X.
+- `wp.spatial_vector`    : layout (wx, wy, wz, vx, vy, vz),
+                            i.e. angular 3-vector first, linear 3-vector second.
+                            Index 3 is linear X.
 
 References
 ----------
@@ -46,13 +46,13 @@ import newton
 def _double_linear_x_kernel(body_f: wp.array(dtype=wp.spatial_vector)):
     """In-place: multiply the linear-X component of each wrench by 2.
 
-    spatial_vector layout is (vx, vy, vz, wx, wy, wz); index 0 = vx.
+    spatial_vector layout is (wx, wy, wz, vx, vy, vz); index 3 = vx (linear X).
     """
     tid = wp.tid()
     f = body_f[tid]
     body_f[tid] = wp.spatial_vector(
-        2.0 * f[0], f[1], f[2],  # linear: +X doubled, Y/Z unchanged
-        f[3], f[4], f[5],        # angular unchanged
+        f[0], f[1], f[2],        # angular unchanged
+        2.0 * f[3], f[4], f[5],  # linear: +X doubled, Y/Z unchanged
     )
 
 
