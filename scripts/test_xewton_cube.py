@@ -19,24 +19,18 @@ How to run
   1. Enable the minsim.physics.xewton extension in Isaac Sim.
   2. Open  Window and Script Editor.
   3. Paste or open this file, then click Run Script.
-  4. Press Play button.  Simulation auto-stops after ~2 s and prints results.
+     Simulation auto-plays, runs ~2 s, prints results, and stops itself.
 """
 
 import numpy as np
 import omni.usd
 import omni.timeline
-from pxr import UsdGeom, UsdPhysics, Gf, Sdf
+from pxr import UsdGeom, UsdLux, UsdPhysics, Gf, Sdf
 
-# ── 0. Reset all mutable state so re-running in Script Editor is safe ───────
-# Release any previous subscription first — its destructor cancels the old
-# callback, preventing double-firing on subsequent runs.
-_sub = None
-
-_sim_t     = 0.0
-_step      = 0
-_body_idx  = None
-_force_buf = None   # numpy array, built once when _body_idx is first resolved
-_done      = False
+# Stop the timeline up-front so re-running mid-test resets cleanly before we
+# clear the stage (otherwise physics ticks against a half-built scene).
+_timeline = omni.timeline.get_timeline_interface()
+_timeline.stop()
 
 # ── 1. Report active engine ─────────────────────────────────────────────────
 try:
@@ -47,6 +41,33 @@ try:
 except Exception as exc:
     print(f"[xewton_test] import failed: {exc}")
     xewton = None
+
+# ── 0. Reset state and detach any callback registered by a previous run. ────
+# subscribe_physics_step_events just does `physics_callbacks.append(callback)`
+# and returns None — there is no token whose destructor cancels the sub. The
+# _xewton_stage singleton (and its callback list) persists across script runs,
+# so without an explicit unsubscribe each Run-Script appends another callback
+# and Run N ends up with N callbacks racing on the same module globals.
+try:
+    _prev_cb = _registered_cb  # type: ignore[name-defined]
+except NameError:
+    _prev_cb = None
+
+if _prev_cb is not None and xewton is not None:
+    _prev_iface = xewton.acquire_physics_interface()
+    if _prev_iface is not None:
+        try:
+            _prev_iface.unsubscribe_physics_step_events(_prev_cb)
+        except ValueError:
+            pass  # already gone (e.g. stage rebuilt by extension reload)
+
+_registered_cb = None
+
+_sim_t     = 0.0
+_step      = 0
+_body_idx  = None
+_force_buf = None   # numpy array, built once when _body_idx is first resolved
+_done      = False
 
 # ── 2. Build stage ──────────────────────────────────────────────────────────
 stage = omni.usd.get_context().get_stage()
@@ -78,6 +99,21 @@ joint = UsdPhysics.PrismaticJoint.Define(stage, JOINT_PATH)
 joint.GetBody0Rel().SetTargets([Sdf.Path(ANCHOR_PATH)])
 joint.GetBody1Rel().SetTargets([Sdf.Path(CUBE_PATH)])
 joint.CreateAxisAttr().Set("X")
+
+# Ambient dome + a directional "sun" so the cube is visible during travel.
+UsdLux.DomeLight.Define(stage, "/World/DomeLight").CreateIntensityAttr().Set(500.0)
+sun = UsdLux.DistantLight.Define(stage, "/World/SunLight")
+sun.CreateIntensityAttr().Set(3000.0)
+sun.CreateAngleAttr().Set(1.0)
+UsdGeom.Xformable(sun.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-45, 0, 30))
+
+# Frame the viewport on the full ~20 m travel path: eye in -Y looking back at
+# the centre of the run, elevated enough to see the cube against the ground plane.
+try:
+    from isaacsim.core.utils.viewports import set_camera_view
+except ImportError:
+    from omni.isaac.core.utils.viewports import set_camera_view
+set_camera_view(eye=[10.0, -25.0, 10.0], target=[10.0, 0.0, 0.0])
 
 # ── 3. Step callback ────────────────────────────────────────────────────────
 FORCE_N  = 5.0
@@ -118,8 +154,8 @@ def _on_step(dt: float) -> None:
     _sim_t += dt
     _step  += 1
 
-    # Pre-step callback: fires before the integrator consumes state_0 as state_in,
-    # so writing body_f here applies the force in the current step.
+    # Post-step callback: fires after simulate() returns, so this body_f is
+    # consumed as state_in on the next step (one-step delay, negligible at 1 kHz).
     newton_stage.state_0.body_f.assign(_force_buf)
 
     if _sim_t < TARGET_T:
@@ -152,13 +188,18 @@ def _on_step(dt: float) -> None:
 if xewton:
     _iface = xewton.acquire_physics_interface()
     if _iface:
-        _sub = _iface.subscribe_physics_step_events(_on_step)
+        _iface.subscribe_physics_step_events(_on_step)
+        # Track the callback so the next Run-Script can unsubscribe it (see § 0).
+        _registered_cb = _on_step
     else:
         print("[xewton_test] WARNING: could not acquire physics interface")
 else:
     print("[xewton_test] WARNING: xewton not available")
 
 print()
-print(f"Stage ready — press Play.  Will auto-stop after ~{TARGET_T:.0f} s and print results.")
+print(f"Auto-playing — will auto-stop after ~{TARGET_T:.0f} s and print results.")
 print(f"  Stock Newton: a = {A_NEWTON:.2f} m/s²  →  x({TARGET_T:.0f}s) ≈ {0.5*A_NEWTON*TARGET_T**2:.2f} m")
 print(f"  Xewton      : a = {A_XEWTON:.2f} m/s²  →  x({TARGET_T:.0f}s) ≈ {0.5*A_XEWTON*TARGET_T**2:.2f} m")
+
+# Kick off the simulation immediately — no need to click Play.
+_timeline.play()
