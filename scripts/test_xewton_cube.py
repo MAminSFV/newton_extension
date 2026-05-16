@@ -9,7 +9,7 @@ Newton body_f spatial_vector layout: (fx, fy, fz, tx, ty, tz)
 
 The XSolver doubles the linear-X component (index 0) of body_f, so:
 
-Expected behaviour
+Expected behavior
 ------------------
   Stock Newton : a =  5.00 m/s²  →  x(2s) ≈  10.00 m
   Xewton       : a = 10.00 m/s²  →  x(2s) ≈  20.00 m
@@ -17,17 +17,28 @@ Expected behaviour
 How to run
 ----------
   1. Enable the minsim.physics.xewton extension in Isaac Sim.
-  2. Open  Window → Script Editor.
+  2. Open  Window and Script Editor.
   3. Paste or open this file, then click Run Script.
-  4. Press ▶ Play.  Simulation auto-stops at 2 s and prints results.
+  4. Press Play button.  Simulation auto-stops after ~2 s and prints results.
 """
 
+import numpy as np
 import omni.usd
 import omni.timeline
-import warp as wp
 from pxr import UsdGeom, UsdPhysics, Gf, Sdf
 
-# ── 1. Report active engine ────────────────────────────────────────────────
+# ── 0. Reset all mutable state so re-running in Script Editor is safe ───────
+# Release any previous subscription first — its destructor cancels the old
+# callback, preventing double-firing on subsequent runs.
+_sub = None
+
+_sim_t     = 0.0
+_step      = 0
+_body_idx  = None
+_force_buf = None   # numpy array, built once when _body_idx is first resolved
+_done      = False
+
+# ── 1. Report active engine ─────────────────────────────────────────────────
 try:
     import minsim.physics.xewton as xewton
     engine = xewton.get_active_physics_engine()
@@ -37,7 +48,7 @@ except Exception as exc:
     print(f"[xewton_test] import failed: {exc}")
     xewton = None
 
-# ── 2. Build stage ─────────────────────────────────────────────────────────
+# ── 2. Build stage ──────────────────────────────────────────────────────────
 stage = omni.usd.get_context().get_stage()
 stage.GetRootLayer().Clear()
 UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
@@ -68,57 +79,60 @@ joint.GetBody0Rel().SetTargets([Sdf.Path(ANCHOR_PATH)])
 joint.GetBody1Rel().SetTargets([Sdf.Path(CUBE_PATH)])
 joint.CreateAxisAttr().Set("X")
 
-# ── 3. Step callback ───────────────────────────────────────────────────────
-FORCE_N    = 5.0
-MASS_KG    = 1.0
-PHYSICS_HZ = 60           # expected physics rate
-N_STEPS    = 2 * PHYSICS_HZ   # 120 steps ≈ 2 s at 60 Hz — deterministic stop
+# ── 3. Step callback ────────────────────────────────────────────────────────
+FORCE_N  = 5.0
+MASS_KG  = 1.0
+TARGET_T = 2.0      # seconds of simulation to run before stopping
 
 A_NEWTON = FORCE_N / MASS_KG        #  5.00 m/s²
 A_XEWTON = A_NEWTON * 2.0           # 10.00 m/s²
 
-# body_f layout: (fx, fy, fz, tx, ty, tz) — force first.
-# 5 N in +X = index 0.
-_wrench = wp.spatial_vector(FORCE_N, 0.0, 0.0, 0.0, 0.0, 0.0)
-
-_sim_t    = 0.0
-_step     = 0
-_body_idx = None
-_done     = False
+# Wrench values: (fx, fy, fz, tx, ty, tz) — force first, torque second.
+_WRENCH_VALS = [FORCE_N, 0.0, 0.0, 0.0, 0.0, 0.0]  # 5 N in +X
 
 def _on_step(dt: float) -> None:
-    global _sim_t, _step, _body_idx, _done
+    global _sim_t, _step, _body_idx, _force_buf, _done
     if _done:
         return
-
-    _sim_t += dt
-    _step  += 1
 
     newton_stage = xewton.acquire_stage() if xewton else None
     if newton_stage is None or newton_stage.state_0 is None or newton_stage.model is None:
         return
 
-    # Resolve body index once.
+    # Resolve the cube's body index and build the force array in the same call,
+    # so no step is wasted between resolution and first force injection.
     if _body_idx is None:
         try:
             _body_idx = list(newton_stage.model.body_label).index(CUBE_PATH)
         except ValueError:
             return
+        # Reset timing so _sim_t measures from the first step where force is applied,
+        # not from Play-press (Newton may take a few steps to initialize).
+        _sim_t = 0.0
+        _step  = 0
+        # Build a full-length zeros array with the wrench at the correct body slot.
+        # Assigning a single-element list would silently hit body 0, not _body_idx.
+        _force_buf = np.zeros((newton_stage.model.body_count, 6), dtype=np.float32)
+        _force_buf[_body_idx] = _WRENCH_VALS
 
-    # Inject constant force for the next step (post-step callback fires after
-    # the state swap, so state_0 is the upcoming state_in).
-    newton_stage.state_0.body_f.assign([_wrench])
+    _sim_t += dt
+    _step  += 1
 
-    if _step < N_STEPS:
+    # Pre-step callback: fires before the integrator consumes state_0 as state_in,
+    # so writing body_f here applies the force in the current step.
+    newton_stage.state_0.body_f.assign(_force_buf)
+
+    if _sim_t < TARGET_T:
         return
 
-    # ── N_STEPS reached: read final position, print, stop. ───────────────
+    # ── TARGET_T reached: read final position, print, stop. ─────────────────
     _done = True
 
+    # body_q is the pre-step position (one step behind _sim_t), a minor
+    # sub-timestep discrepancy that is negligible over a 2 s run.
     body_q = newton_stage.state_0.body_q.numpy()
     x = float(body_q[_body_idx][0])
 
-    # Use actual accumulated sim_t so expected values match the real run.
     x_newton = 0.5 * A_NEWTON * _sim_t ** 2
     x_xewton = 0.5 * A_XEWTON * _sim_t ** 2
 
@@ -145,6 +159,6 @@ else:
     print("[xewton_test] WARNING: xewton not available")
 
 print()
-print(f"Stage ready — press Play.  Will auto-stop after {N_STEPS} steps (~2 s) and print results.")
-print(f"  Stock Newton: a = {A_NEWTON:.2f} m/s²  →  x(2s) ≈ {0.5*A_NEWTON*4.0:.2f} m")
-print(f"  Xewton      : a = {A_XEWTON:.2f} m/s²  →  x(2s) ≈ {0.5*A_XEWTON*4.0:.2f} m")
+print(f"Stage ready — press Play.  Will auto-stop after ~{TARGET_T:.0f} s and print results.")
+print(f"  Stock Newton: a = {A_NEWTON:.2f} m/s²  →  x({TARGET_T:.0f}s) ≈ {0.5*A_NEWTON*TARGET_T**2:.2f} m")
+print(f"  Xewton      : a = {A_XEWTON:.2f} m/s²  →  x({TARGET_T:.0f}s) ≈ {0.5*A_XEWTON*TARGET_T**2:.2f} m")
